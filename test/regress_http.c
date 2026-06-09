@@ -6221,6 +6221,7 @@ struct testcase_t http_testcases[] = {
 	HTTP(on_complete),
 	HTTP(ws),
 	HTTP(ws_msg_limit),
+	HTTP_N(ws_early_free, ws_early_free, TT_NEED_THREADS, NULL),
 
 	HTTP(highport),
 	HTTP(dispatcher),

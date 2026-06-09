@@ -608,3 +608,76 @@ end:
 	if (http)
 		evhttp_free(http);
 }
+
+static struct bufferevent *
+ws_threadsafe_bevcb(struct event_base *base, void *arg)
+{
+	return bufferevent_socket_new(
+		base, -1, BEV_OPT_CLOSE_ON_FREE | BEV_OPT_THREADSAFE);
+}
+
+static int ws_early_free_session_was_null;
+
+static void
+http_on_ws_early_free_cb(struct evhttp_request *req, void *arg)
+{
+	struct evws_connection *evws;
+
+	evws = evws_new_session(req, on_ws_msg_cb, (void *)0xDEADBEEF,
+		BEV_OPT_THREADSAFE);
+	if (evws == NULL) {
+		ws_early_free_session_was_null = 1;
+		test_ok++;
+	}
+}
+
+static void
+ws_early_free_drain_readcb(struct bufferevent *bev, void *arg)
+{
+	evbuffer_drain(bufferevent_get_input(bev), evbuffer_get_length(
+		bufferevent_get_input(bev)));
+}
+
+void
+http_ws_early_free_test(void *arg)
+{
+	struct basic_test_data *data = arg;
+	struct bufferevent *bev = NULL;
+	evutil_socket_t fd;
+	ev_uint16_t port = 0;
+	struct evhttp *http = http_setup(&port, data->base, 0);
+	struct evbuffer *out;
+	struct timeval tv = {5, 0};
+
+	exit_base = data->base;
+	ws_early_free_session_was_null = 0;
+
+	evhttp_set_bevcb(http, ws_threadsafe_bevcb, NULL);
+	evhttp_set_cb(http, "/ws_early_free", http_on_ws_early_free_cb, NULL);
+
+	fd = http_connect("127.0.0.1", port);
+	bev = create_bev(data->base, fd, 0, BEV_OPT_CLOSE_ON_FREE);
+	bufferevent_setcb(bev, ws_early_free_drain_readcb, http_writecb,
+		http_ws_errorcb, data->base);
+	out = bufferevent_get_output(bev);
+
+	evbuffer_add_printf(out,
+		"GET /ws_early_free HTTP/1.1\r\n"
+		"Host: somehost\r\n"
+		"Connection: Upgrade\r\n"
+		"Upgrade: websocket\r\n"
+		"Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==\r\n"
+		"\r\n");
+
+	test_ok = 0;
+	event_base_loopexit(data->base, &tv);
+	event_base_dispatch(data->base);
+
+	tt_int_op(ws_early_free_session_was_null, ==, 1);
+
+	evhttp_free(http);
+end:
+	if (bev)
+		bufferevent_free(bev);
+}
+

@@ -411,6 +411,8 @@ evws_new_session(
 	const char *upgrade, *connection, *ws_key, *ws_protocol;
 	struct evkeyvalq *out_hdrs;
 	struct evhttp_connection *evcon;
+	struct evhttp *ws_http_server;
+	int req_owned = 1;
 
 	in_hdrs = evhttp_request_get_input_headers(req);
 	upgrade = evhttp_find_header(in_hdrs, "Upgrade");
@@ -445,12 +447,14 @@ evws_new_session(
 	evws->cb_arg = arg;
 
 	evcon = evhttp_request_get_connection(req);
-	evws->http_server = evcon->http_server;
+	ws_http_server = evcon->http_server;
 
+	/* evhttp_start_ws_ frees both req and evcon on success */
 	evws->bufev = evhttp_start_ws_(req);
 	if (evws->bufev == NULL) {
 		goto error;
 	}
+	req_owned = 0;
 
 	if (options & BEV_OPT_THREADSAFE) {
 		if (bufferevent_enable_locking_(evws->bufev, NULL) < 0)
@@ -460,6 +464,7 @@ evws_new_session(
 	bufferevent_setcb(
 		evws->bufev, ws_evhttp_read_cb, NULL, ws_evhttp_error_cb, evws);
 
+	evws->http_server = ws_http_server;
 	TAILQ_INSERT_TAIL(&evws->http_server->ws_sessions, evws, next);
 	evws->http_server->connection_cnt++;
 
@@ -469,7 +474,8 @@ error:
 	if (evws)
 		evws_connection_free(evws);
 
-	evhttp_send_reply(req, HTTP_BADREQUEST, NULL, NULL);
+	if (req_owned)
+		evhttp_send_reply(req, HTTP_BADREQUEST, NULL, NULL);
 	return NULL;
 }
 
